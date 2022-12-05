@@ -8,6 +8,7 @@ import lmdb
 from tqdm import tqdm
 from torchvision import datasets
 from torchvision.transforms import functional as trans_fn
+import pandas as pd
 
 
 def resize_and_convert(img, size, resample, quality=100):
@@ -62,6 +63,30 @@ def prepare(
         with env.begin(write=True) as txn:
             txn.put("length".encode("utf-8"), str(total).encode("utf-8"))
 
+def prepare_from_path(
+    env, dataset, n_worker, sizes=(128, 256, 512, 1024), resample=Image.LANCZOS
+):
+    resize_fn = partial(resize_worker, sizes=sizes, resample=resample)
+
+    image = pd.read_csv(dataset)
+    files = [] 
+    for index, row in image.iterrows():
+        files.append((index,row['path']))
+    total = 0
+
+    with multiprocessing.Pool(n_worker) as pool:
+        for i, imgs in tqdm(pool.imap_unordered(resize_fn, files)):
+            for size, img in zip(sizes, imgs):
+                key = f"{size}-{str(i).zfill(5)}".encode("utf-8")
+
+                with env.begin(write=True) as txn:
+                    txn.put(key, img)
+
+            total += 1
+
+        with env.begin(write=True) as txn:
+            txn.put("length".encode("utf-8"), str(total).encode("utf-8"))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess images for model training")
@@ -69,7 +94,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--size",
         type=str,
-        default="128,256,512,1024",
+        default="64,128,256",
         help="resolutions of images for the dataset",
     )
     parser.add_argument(
@@ -95,7 +120,8 @@ if __name__ == "__main__":
 
     print(f"Make dataset of image sizes:", ", ".join(str(s) for s in sizes))
 
-    imgset = datasets.ImageFolder(args.path)
+    # imgset = datasets.ImageFolder(args.path)
+    imgset = "/edward-slow-vol/Sketch2Model/Sketch2Model/data/chair.csv"
 
     with lmdb.open(args.out, map_size=1024 ** 4, readahead=False) as env:
-        prepare(env, imgset, args.n_worker, sizes=sizes, resample=resample)
+        prepare_from_path(env, imgset, args.n_worker, sizes=sizes, resample=resample)
